@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Observasi Kasir - Multi Kasir</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; background:#f6f7f8; margin:20px; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    .sub { margin: 0 0 14px; color:#444; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card { background:#fff; border-radius:14px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+    .badge { padding:6px 10px; border-radius:999px; border:1px solid #ddd; background:#fafafa; }
+    .timer { font-size: 40px; font-weight: 750; letter-spacing: .5px; }
+    button { padding: 12px 16px; border-radius: 12px; border: 1px solid #ddd; background:#fff; font-size:14px; cursor:pointer; }
+    button.primary { background:#111827; color:#fff; border-color:#111827; }
+    button.danger { background:#b91c1c; color:#fff; border-color:#b91c1c; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .tablewrap { margin-top:14px; }
+    table { width:100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #eee; text-align:left; }
+    th { background:#fafafa; position: sticky; top: 0; }
+    .tools { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
+    .note { margin-top:10px; color:#555; font-size:12px; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>Observasi Kasir (Multi Kasir)</h1>
+    <div class="sub">Flow per kasir: Mulai → (+/− item) → pilih pembayaran di akhir → Selesai & Simpan.</div>
+
+    <div class="grid" id="cashierGrid"></div>
+
+    <div class="card tablewrap">
+      <div class="row" style="justify-content:space-between;">
+        <b>Data Tersimpan (semua kasir)</b>
+        <div class="tools">
+          <button id="btnExport">Export CSV</button>
+          <button id="btnClear" class="danger">Hapus Semua</button>
+        </div>
+      </div>
+
+      <div style="max-height: 420px; overflow:auto; border:1px solid #eee; border-radius:12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Kasir</th>
+              <th>Durasi (detik)</th>
+              <th>Item</th>
+              <th>Pembayaran</th>
+              <th>Timestamp</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        Tips: kalau mau lebih cepat, gunakan keyboard saat fokus di halaman:
+        <b>[1]</b> = +item Kasir 1, <b>[Q]</b> = -item Kasir 1, <b>[2]</b> = +item Kasir 2, <b>[W]</b> = -item Kasir 2.
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const STORAGE_KEY = "kasir_multi_v1";
+  const CASHIER_COUNT = 2; // Ubah jadi 3/4 kalau mau
+  let rows = loadRows();
+
+  function loadRows() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    catch { return []; }
+  }
+  function saveRows() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+  }
+
+  function fmtTimer(ms) {
+    const s = ms / 1000;
+    const m = Math.floor(s / 60);
+    const r = (s % 60).toFixed(1).padStart(4, "0"); // "SS.S"
+    return String(m).padStart(2, "0") + ":" + r;
+  }
+
+  // === Per-kasir state
+  const cashiers = Array.from({ length: CASHIER_COUNT }, (_, i) => ({
+    id: i + 1,
+    running: false,
+    startPerf: null,
+    tick: null,
+    item: 0,
+    payment: "", // "Tunai" / "Non-tunai"
+    elements: null,
+  }));
+
+  // === UI build
+  const grid = document.getElementById("cashierGrid");
+  cashiers.forEach(c => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="row" style="justify-content:space-between;">
+        <b>Kasir ${c.id}</b>
+        <span class="badge">Status: <b data-status>Siap</b></span>
+      </div>
+
+      <div class="row">
+        <div class="timer" data-timer>00:00.0</div>
+      </div>
+
+      <div class="row">
+        <span class="badge">Item: <b data-item>0</b></span>
+        <button data-plus class="primary" disabled>+ Item</button>
+        <button data-minus disabled>- Item</button>
+      </div>
+
+      <div class="row">
+        <span class="badge">Pembayaran: <b data-pay>-</b></span>
+      </div>
+
+      <div class="row">
+        <button data-start class="primary">Mulai</button>
+        <button data-tunai disabled>Tunai</button>
+        <button data-nontunai disabled>Non-tunai</button>
+        <button data-end class="danger" disabled>Selesai & Simpan</button>
+      </div>
+
+      <div class="note">Pilih pembayaran <b>di akhir</b> sebelum klik Selesai.</div>
+    `;
+    grid.appendChild(card);
+
+    // bind elements
+    c.elements = {
+      card,
+      status: card.querySelector("[data-status]"),
+      timer: card.querySelector("[data-timer]"),
+      item: card.querySelector("[data-item]"),
+      pay: card.querySelector("[data-pay]"),
+      btnStart: card.querySelector("[data-start]"),
+      btnPlus: card.querySelector("[data-plus]"),
+      btnMinus: card.querySelector("[data-minus]"),
+      btnTunai: card.querySelector("[data-tunai]"),
+      btnNon: card.querySelector("[data-nontunai]"),
+      btnEnd: card.querySelector("[data-end]"),
+    };
+
+    // events
+    c.elements.btnStart.addEventListener("click", () => startCashier(c.id));
+    c.elements.btnPlus.addEventListener("click", () => addItem(c.id, +1));
+    c.elements.btnMinus.addEventListener("click", () => addItem(c.id, -1));
+    c.elements.btnTunai.addEventListener("click", () => setPayment(c.id, "Tunai"));
+    c.elements.btnNon.addEventListener("click", () => setPayment(c.id, "Non-tunai"));
+    c.elements.btnEnd.addEventListener("click", () => endCashier(c.id));
+  });
+
+  function setControls(c) {
+    const el = c.elements;
+    el.btnStart.disabled = c.running;               // mulai hanya saat idle
+    el.btnPlus.disabled = !c.running;
+    el.btnMinus.disabled = !c.running || c.item <= 0;
+    el.btnTunai.disabled = !c.running;              // pembayaran dipilih saat running (biasanya di akhir)
+    el.btnNon.disabled = !c.running;
+    el.btnEnd.disabled = !c.running;                // simpan hanya saat running
+  }
+
+  function syncUI(c) {
+    c.elements.item.textContent = String(c.item);
+    c.elements.pay.textContent = c.payment || "-";
+    setControls(c);
+  }
+
+  function startCashier(id) {
+    const c = cashiers[id - 1];
+    if (c.running) return;
+
+    c.running = true;
+    c.startPerf = performance.now();
+    c.payment = ""; // reset payment tiap pelanggan
+    c.item = 0;
+
+    c.elements.status.textContent = "Berjalan";
+    c.elements.timer.textContent = "00:00.0";
+
+    c.tick = setInterval(() => {
+      c.elements.timer.textContent = fmtTimer(performance.now() - c.startPerf);
+    }, 100);
+
+    syncUI(c);
+  }
+
+  function addItem(id, delta) {
+    const c = cashiers[id - 1];
+    if (!c.running) return;
+    c.item = Math.max(0, c.item + delta);
+    syncUI(c);
+  }
+
+  function setPayment(id, method) {
+    const c = cashiers[id - 1];
+    if (!c.running) return;
+    c.payment = method;
+    syncUI(c);
+  }
+
+  function endCashier(id) {
+    const c = cashiers[id - 1];
+    if (!c.running) return;
+
+    if (!c.payment) {
+      alert(`Kasir ${id}: pilih metode pembayaran dulu (Tunai / Non-tunai).`);
+      return;
+    }
+
+    clearInterval(c.tick);
+    c.tick = null;
+
+    const durSec = Math.round(((performance.now() - c.startPerf) / 1000) * 10) / 10;
+
+    rows.push({
+      kasir: id,
+      durasi_detik: durSec,
+      jumlah_item: c.item,
+      metode_pembayaran: c.payment,
+      timestamp: new Date().toISOString()
+    });
+    saveRows();
+    renderTable();
+
+    // reset state kasir
+    c.running = false;
+    c.startPerf = null;
+    c.item = 0;
+    c.payment = "";
+    c.elements.status.textContent = "Siap";
+    c.elements.timer.textContent = "00:00.0";
+    syncUI(c);
+  }
+
+  // === Table + export
+  const tbody = document.getElementById("tbody");
+
+  function renderTable() {
+    tbody.innerHTML = "";
+    rows.forEach((r, idx) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${idx + 1}</td>
+        <td>${r.kasir}</td>
+        <td>${r.durasi_detik}</td>
+        <td>${r.jumlah_item}</td>
+        <td>${r.metode_pembayaran}</td>
+        <td>${r.timestamp}</td>
+        <td><button data-del="${idx}">Hapus</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll("button[data-del]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.getAttribute("data-del"));
+        rows.splice(i, 1);
+        saveRows();
+        renderTable();
+      });
+    });
+  }
+
+  document.getElementById("btnExport").addEventListener("click", () => {
+    const header = ["timestamp","kasir","durasi_detik","jumlah_item","metode_pembayaran"];
+    const lines = [header.join(",")];
+    rows.forEach(r => {
+      lines.push([
+        r.timestamp,
+        r.kasir,
+        r.durasi_detik,
+        r.jumlah_item,
+        `"${String(r.metode_pembayaran).replaceAll('"','""')}"`
+      ].join(","));
+    });
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "data_kasir_multi.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById("btnClear").addEventListener("click", () => {
+    if (!confirm("Yakin hapus semua data?")) return;
+    rows = [];
+    saveRows();
+    renderTable();
+  });
+
+  // Keyboard shortcuts (opsional)
+  // 1 = +item kasir1, Q = -item kasir1, 2 = +item kasir2, W = -item kasir2
+  document.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "1") addItem(1, +1);
+    if (k === "q") addItem(1, -1);
+    if (k === "2") addItem(2, +1);
+    if (k === "w") addItem(2, -1);
+  });
+
+  // init
+  renderTable();
+  cashiers.forEach(syncUI);
+})();
+</script>
+</body>
+</html>

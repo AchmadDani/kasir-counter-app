@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Observasi Kasir (HP) - 2 Kasir</title>
+  <style>
+    :root{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      --bg:#f6f7f8; --card:#ffffff; --line:#e7e7e7;
+      --text:#111827; --muted:#6b7280; --dark:#111827; --danger:#b91c1c;
+      --radius:18px;
+    }
+    body{ margin:0; background:var(--bg); color:var(--text); }
+    .wrap{ max-width: 980px; margin:0 auto; padding: 14px 12px 20px; }
+    h1{ font-size:18px; margin: 6px 0 4px; }
+    .sub{ margin:0 0 12px; color:var(--muted); font-size:13px; line-height:1.35; }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media (min-width: 860px){
+      .grid{ grid-template-columns: 1fr 1fr; }
+    }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .toprow{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      margin-bottom: 8px;
+    }
+    .title{ font-weight: 800; }
+    .badge{
+      font-size: 12px; color: var(--muted);
+      border:1px solid var(--line);
+      background:#fafafa;
+      padding:6px 10px;
+      border-radius: 999px;
+      white-space:nowrap;
+    }
+
+    .timer{
+      font-size: 44px;
+      font-weight: 900;
+      letter-spacing: .5px;
+      margin: 6px 0 10px;
+    }
+
+    .meta{
+      display:flex; flex-wrap:wrap; gap:8px; margin-bottom: 10px;
+    }
+    .pill{
+      border:1px solid var(--line);
+      background:#fff;
+      padding:8px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+    }
+    .pill b{ color:var(--text); }
+
+    .btnrow{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    button{
+      border:1px solid var(--line);
+      background:#fff;
+      padding: 14px 12px;
+      border-radius: 16px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    button.primary{ background: var(--dark); color:#fff; border-color: var(--dark); }
+    button.danger{ background: var(--danger); color:#fff; border-color: var(--danger); }
+    button:disabled{ opacity: .45; cursor:not-allowed; }
+
+    .btnrow3{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .full{ grid-column: 1 / -1; }
+
+    .hint{ margin-top:10px; color: var(--muted); font-size: 12px; line-height:1.35; }
+
+    .dataCard{ margin-top: 12px; }
+    .tools{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .tools button{ font-size: 14px; padding: 10px 12px; border-radius: 14px; }
+    table{ width:100%; border-collapse:collapse; font-size: 12px; }
+    th, td{ padding: 8px 6px; border-bottom: 1px solid #eee; }
+    th{ background:#fafafa; position: sticky; top:0; }
+    .scroll{ max-height: 320px; overflow:auto; border:1px solid var(--line); border-radius: 14px; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>Observasi Kasir (HP) - 2 Kasir</h1>
+    <p class="sub">
+      Flow per kasir: <b>Mulai</b> → hitung item (+/−) → pilih pembayaran di akhir → <b>Selesai & Simpan</b>.
+      Data tersimpan di HP (localStorage) dan bisa <b>Export CSV</b>.
+    </p>
+
+    <div class="grid" id="grid"></div>
+
+    <div class="card dataCard">
+      <div class="toprow">
+        <div class="title">Data Tersimpan</div>
+        <div class="tools">
+          <button id="btnExport">Export CSV</button>
+          <button id="btnClear" class="danger">Hapus Semua</button>
+        </div>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Kasir</th>
+              <th>Durasi (detik)</th>
+              <th>Item</th>
+              <th>Bayar</th>
+              <th>Timestamp</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="hint">
+        Tips HP: saat kasir ramai, fokus 1 kasir dulu. 2 kasir aman kalau ritmenya tidak terlalu padat.
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const STORAGE_KEY = "kasir_hp_multi_v1";
+  const CASHIER_COUNT = 2;
+
+  let rows = loadRows();
+
+  function loadRows(){
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    catch { return []; }
+  }
+  function saveRows(){
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+  }
+
+  function fmt(ms){
+    const s = ms/1000;
+    const m = Math.floor(s/60);
+    const r = (s%60).toFixed(1).padStart(4,"0");
+    return String(m).padStart(2,"0")+":"+r;
+  }
+
+  const grid = document.getElementById("grid");
+
+  const cashiers = Array.from({length:CASHIER_COUNT}, (_,i)=>({
+    id: i+1,
+    running:false,
+    startPerf:null,
+    tick:null,
+    item:0,
+    payment:"",
+    el:{}
+  }));
+
+  function buildCashierUI(c){
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="toprow">
+        <div class="title">Kasir ${c.id}</div>
+        <div class="badge">Status: <b data-status>Siap</b></div>
+      </div>
+
+      <div class="timer" data-timer>00:00.0</div>
+
+      <div class="meta">
+        <div class="pill">Item: <b data-item>0</b></div>
+        <div class="pill">Bayar: <b data-pay>-</b></div>
+      </div>
+
+      <div class="btnrow">
+        <button data-start class="primary">Mulai</button>
+        <button data-end class="danger" disabled>Selesai & Simpan</button>
+      </div>
+
+      <div class="btnrow">
+        <button data-plus disabled>+ Item</button>
+        <button data-minus disabled>- Item</button>
+      </div>
+
+      <div class="btnrow3">
+        <button data-tunai class="full" disabled>Pilih: Tunai</button>
+        <button data-non class="full" disabled>Pilih: Non-tunai</button>
+      </div>
+
+      <div class="hint">
+        Pilih metode bayar <b>setelah</b> scan selesai. Klik <b>Selesai & Simpan</b> saat struk sudah diberikan.
+      </div>
+    `;
+    grid.appendChild(card);
+
+    c.el = {
+      card,
+      status: card.querySelector("[data-status]"),
+      timer: card.querySelector("[data-timer]"),
+      item: card.querySelector("[data-item]"),
+      pay: card.querySelector("[data-pay]"),
+      start: card.querySelector("[data-start]"),
+      end: card.querySelector("[data-end]"),
+      plus: card.querySelector("[data-plus]"),
+      minus: card.querySelector("[data-minus]"),
+      tunai: card.querySelector("[data-tunai]"),
+      non: card.querySelector("[data-non]"),
+    };
+
+    c.el.start.addEventListener("click", ()=>start(c.id));
+    c.el.plus.addEventListener("click", ()=>addItem(c.id, +1));
+    c.el.minus.addEventListener("click", ()=>addItem(c.id, -1));
+    c.el.tunai.addEventListener("click", ()=>setPayment(c.id, "Tunai"));
+    c.el.non.addEventListener("click", ()=>setPayment(c.id, "Non-tunai"));
+    c.el.end.addEventListener("click", ()=>finish(c.id));
+
+    sync(c);
+  }
+
+  function setControls(c){
+    c.el.start.disabled = c.running;
+    c.el.end.disabled = !c.running;
+    c.el.plus.disabled = !c.running;
+    c.el.minus.disabled = !c.running || c.item <= 0;
+
+    // pembayaran dipilih di akhir, tapi tombolnya aktif setelah mulai (running)
+    c.el.tunai.disabled = !c.running;
+    c.el.non.disabled = !c.running;
+  }
+
+  function sync(c){
+    c.el.item.textContent = String(c.item);
+    c.el.pay.textContent = c.payment || "-";
+    setControls(c);
+  }
+
+  function start(id){
+    const c = cashiers[id-1];
+    if (c.running) return;
+
+    c.running = true;
+    c.startPerf = performance.now();
+    c.item = 0;
+    c.payment = "";
+    c.el.status.textContent = "Berjalan";
+    c.el.timer.textContent = "00:00.0";
+
+    c.tick = setInterval(()=>{
+      c.el.timer.textContent = fmt(performance.now() - c.startPerf);
+    }, 100);
+
+    sync(c);
+  }
+
+  function addItem(id, delta){
+    const c = cashiers[id-1];
+    if (!c.running) return;
+    c.item = Math.max(0, c.item + delta);
+    sync(c);
+  }
+
+  function setPayment(id, method){
+    const c = cashiers[id-1];
+    if (!c.running) return;
+    c.payment = method;
+    sync(c);
+  }
+
+  function finish(id){
+    const c = cashiers[id-1];
+    if (!c.running) return;
+
+    if (!c.payment){
+      alert(`Kasir ${id}: pilih metode pembayaran dulu (Tunai / Non-tunai).`);
+      return;
+    }
+
+    clearInterval(c.tick);
+    c.tick = null;
+
+    const dur = Math.round(((performance.now() - c.startPerf)/1000)*10)/10;
+
+    rows.push({
+      timestamp: new Date().toISOString(),
+      kasir: id,
+      durasi_detik: dur,
+      jumlah_item: c.item,
+      metode_pembayaran: c.payment
+    });
+    saveRows();
+    renderTable();
+
+    // reset kasir
+    c.running = false;
+    c.startPerf = null;
+    c.item = 0;
+    c.payment = "";
+    c.el.status.textContent = "Siap";
+    c.el.timer.textContent = "00:00.0";
+    sync(c);
+  }
+
+  // Table
+  const tbody = document.getElementById("tbody");
+  function renderTable(){
+    tbody.innerHTML = "";
+    rows.forEach((r, i)=>{
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${i+1}</td>
+        <td>${r.kasir}</td>
+        <td>${r.durasi_detik}</td>
+        <td>${r.jumlah_item}</td>
+        <td>${r.metode_pembayaran}</td>
+        <td>${r.timestamp}</td>
+        <td><button data-del="${i}">Hapus</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll("button[data-del]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const idx = Number(btn.getAttribute("data-del"));
+        rows.splice(idx, 1);
+        saveRows();
+        renderTable();
+      });
+    });
+  }
+
+  // Export CSV
+  document.getElementById("btnExport").addEventListener("click", ()=>{
+    const header = ["timestamp","kasir","durasi_detik","jumlah_item","metode_pembayaran"];
+    const lines = [header.join(",")];
+    rows.forEach(r=>{
+      lines.push([
+        r.timestamp,
+        r.kasir,
+        r.durasi_detik,
+        r.jumlah_item,
+        `"${String(r.metode_pembayaran).replaceAll('"','""')}"`
+      ].join(","));
+    });
+
+    const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "data_kasir_hp_multi.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // Clear
+  document.getElementById("btnClear").addEventListener("click", ()=>{
+    if (!confirm("Yakin hapus semua data?")) return;
+    rows = [];
+    saveRows();
+    renderTable();
+  });
+
+  // Init
+  cashiers.forEach(buildCashierUI);
+  renderTable();
+})();
+</script>
+</body>
+</html>
